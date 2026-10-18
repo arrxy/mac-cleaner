@@ -32,7 +32,13 @@ remove_path() {
   local path="$1"
   if [[ -e "$path" ]]; then
     size_of "$path"
-    run "rm -rf \"$path\""
+    # no eval: paths (e.g. Trash entries) can contain quotes or $
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "[dry-run] rm -rf $path"
+    else
+      echo "[run] rm -rf $path"
+      rm -rf "$path"
+    fi
   fi
 }
 
@@ -42,18 +48,29 @@ df -h /System/Volumes/Data 2>/dev/null || true
 echo
 
 echo "Closing apps that commonly hold cache files..."
-run "pkill 'Google Chrome' 2>/dev/null || true"
-run "pkill 'Notion' 2>/dev/null || true"
-run "pkill 'Claude' 2>/dev/null || true"
-run "pkill 'Slack' 2>/dev/null || true"
-run "pkill 'Discord' 2>/dev/null || true"
-run "pkill 'Code' 2>/dev/null || true"
-run "pkill 'Cursor' 2>/dev/null || true"
+# -x: exact process name, so 'Code' doesn't hit every process containing "Code"
+run "pkill -x 'Google Chrome' 2>/dev/null || true"
+run "pkill -x 'Brave Browser' 2>/dev/null || true"
+run "pkill -x 'Notion' 2>/dev/null || true"
+run "pkill -x 'Slack' 2>/dev/null || true"
+run "pkill -x 'Discord' 2>/dev/null || true"
+run "pkill -x 'Code' 2>/dev/null || true"
+run "pkill -x 'Cursor' 2>/dev/null || true"
+
+# Claude is opt-in: this script may be running inside Claude's own terminal
+read -r -p "Quit Claude and clean its caches? [y/N] " CLEAN_CLAUDE
+if [[ "$CLEAN_CLAUDE" =~ ^[Yy]$ ]]; then
+  run "pkill -x 'Claude' 2>/dev/null || true"
+fi
 echo
 
 echo "Cleaning user Trash..."
-remove_path "$HOME/.Trash"
-mkdir -p "$HOME/.Trash"
+# delete contents only: ~/.Trash itself has 700 perms + ACL that mkdir can't restore
+shopt -s dotglob nullglob
+for item in "$HOME/.Trash"/*; do
+  remove_path "$item"
+done
+shopt -u dotglob nullglob
 echo
 
 echo "Cleaning general user caches..."
@@ -111,24 +128,27 @@ remove_path "$NOTION/GPUCache"
 remove_path "$NOTION/Service Worker/CacheStorage"
 echo
 
-echo "Cleaning Claude cache..."
 CLAUDE="$HOME/Library/Application Support/Claude"
+if [[ "$CLEAN_CLAUDE" =~ ^[Yy]$ ]]; then
+  echo "Cleaning Claude cache..."
+  remove_path "$CLAUDE/Cache"
+  remove_path "$CLAUDE/Code Cache"
+  remove_path "$CLAUDE/GPUCache"
 
-remove_path "$CLAUDE/Cache"
-remove_path "$CLAUDE/Code Cache"
-remove_path "$CLAUDE/GPUCache"
+  echo
+  echo "Claude vm_bundles can be huge."
+  echo "It is usually re-downloadable, but it may reset local Claude runtime/tooling data."
+  echo "Current size:"
+  size_of "$CLAUDE/vm_bundles"
 
-echo
-echo "Claude vm_bundles can be huge."
-echo "It is usually re-downloadable, but it may reset local Claude runtime/tooling data."
-echo "Current size:"
-size_of "$CLAUDE/vm_bundles"
-
-read -r -p "Delete Claude vm_bundles? [y/N] " DELETE_CLAUDE_VM
-if [[ "$DELETE_CLAUDE_VM" =~ ^[Yy]$ ]]; then
-  remove_path "$CLAUDE/vm_bundles"
+  read -r -p "Delete Claude vm_bundles? [y/N] " DELETE_CLAUDE_VM
+  if [[ "$DELETE_CLAUDE_VM" =~ ^[Yy]$ ]]; then
+    remove_path "$CLAUDE/vm_bundles"
+  else
+    echo "Skipping Claude vm_bundles."
+  fi
 else
-  echo "Skipping Claude vm_bundles."
+  echo "Skipping Claude (still running)."
 fi
 echo
 

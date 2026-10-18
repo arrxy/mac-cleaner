@@ -2,6 +2,12 @@
 
 set -u
 
+# under sudo, the mkdir'd ~/Library/Caches and Logs become root-owned and apps can't write to them
+if [[ $EUID -eq 0 ]]; then
+  echo "Don't run this with sudo; it asks for sudo itself where needed." >&2
+  exit 1
+fi
+
 DRY_RUN=false
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -56,6 +62,10 @@ run "pkill -x 'Slack' 2>/dev/null || true"
 run "pkill -x 'Discord' 2>/dev/null || true"
 run "pkill -x 'Code' 2>/dev/null || true"
 run "pkill -x 'Cursor' 2>/dev/null || true"
+# JetBrains IDEs: their caches and logs get wiped below
+for ide in rustrover idea pycharm clion goland webstorm datagrip rider phpstorm rubymine; do
+  run "pkill -x '$ide' 2>/dev/null || true"
+done
 
 # Claude is opt-in: this script may be running inside Claude's own terminal
 read -r -p "Quit Claude and clean its caches? [y/N] " CLEAN_CLAUDE
@@ -229,6 +239,22 @@ if command -v tmutil >/dev/null 2>&1; then
 else
   echo "tmutil not found, skipping snapshots."
 fi
+echo
+
+echo "Post-cleanup fixes..."
+# an earlier sudo run left these root-owned, which breaks Claude, JetBrains, etc.
+for dir in "$HOME/Library/Caches" "$HOME/Library/Logs" "$HOME/.cache"; do
+  if [[ -e "$dir" && ! -O "$dir" ]]; then
+    run "sudo chown -R '$USER':staff '$dir'"
+  fi
+done
+
+# stale marker from a failed settings reset blocks every JetBrains IDE launch
+shopt -s nullglob
+for marker in "$JETBRAINS"/*/migrate.config; do
+  remove_path "$marker"
+done
+shopt -u nullglob
 echo
 
 echo "After cleanup:"
